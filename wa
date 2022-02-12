@@ -110,7 +110,6 @@ def choose_words(sfreqs, words):
                 for f3 in range(0,depth):
                     for f4 in range(0,depth):
                         w = sfreqs[0][f][0] + sfreqs[1][f1][0] + sfreqs[2][f2][0] + sfreqs[3][f3][0] + sfreqs[4][f4][0]
-                        print(f"w1={w}")
                         if w in words: # is this permutation of letters actually a word? 
                             yield w
 
