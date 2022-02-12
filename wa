@@ -1,0 +1,229 @@
+#!/bin/env python3
+"""
+    wa - wordle assistant
+
+    The MIT License (MIT)
+    Copyright (c) 2022 Timothy Norman Murphy <tnmurphy@gmail.com>
+    Permission is hereby granted, free of charge, to any person obtaining a
+    copy of this software and associated documentation files (the "Software"),
+    to deal in the Software without restriction, including without limitation
+    the rights to use, copy, modify, merge, publish, distribute, sublicense,
+    and/or sell copies of the Software, and to permit persons to whom the
+    Software is furnished to do so, subject to the following conditions: The
+    above copyright notice and this permission notice shall be included in all
+    copies or substantial portions of the Software.  THE SOFTWARE IS PROVIDED
+    "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT
+    NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR
+    PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT
+    HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER
+    IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN
+    CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+
+    wa builds a regular expression from a file containing the state of play
+    and uses that to filter a dictionary to find all the words that could
+    match.  It then looks at the frequency of letters in the remaining 
+    dictionary and tries to create suggestions in order of high possibility
+    by permutating the letters and then selecting any results that are 
+    a) words
+    b) match the filter
+"""
+
+import sys, os
+import re
+import json
+import argparse
+
+def load_dict(filename) -> dict():
+    """loads up a simple word list""" 
+    words = set()
+    with open(filename, "r") as f:
+        for l in f:
+            words.add(l.rstrip("\n").lower())
+    return words
+
+def calculate_freqs(words):
+    """ goes through a list of words which are 
+        expected to be exactly 5 characters each 
+        and counts the number of each character seen
+        in each position in the word.
+
+        so the result for input [ "thing", "sting" ]
+        would be: [
+            {'t': 1, 's': 1}, 
+            {'h': 1, 't': 1},
+            {'i': 2},
+            {'n': 2},
+            {'g': 2}
+        ] 
+        """
+    f0={}
+    f1={}
+    f2={}
+    f3={}
+    f4={}
+    freqs = [f0,f1,f2,f3,f4]
+
+    for f in freqs:
+        for c in 'abcdefghijklmnopqrstuvwxyz':
+            f[c] = 0
+
+    for w in words:
+        f0[w[0]] += 1
+        f1[w[1]] += 1
+        f2[w[2]] += 1
+        f3[w[3]] += 1
+        f4[w[4]] += 1
+    return freqs
+
+
+def sort_freqs(freqs):
+    """produces a sorted list of tuples for each position in 
+    a 5 character string from the output of calculate_freqs().
+    Sorting is on the 2nd item of the tuple such that the 
+    most comon letters at that position in the word are 
+    at the front of the list.
+    """
+
+    sfreqs=[]
+    for f in freqs:
+        d = sorted(f.items(), key=lambda x: x[1] , reverse=1)
+        sfreqs.append(d)
+    return sfreqs
+
+
+def show_sfreqs(sfreqs):
+    for d in sfreqs:
+        for k,v in d:
+            sys.stdout.write(f"{k}:{v} ")
+        sys.stdout.write(f"\n")
+
+def choose_words(sfreqs, words):
+    """Generate permutations of letters from the sorted frequency output of sort_freq()
+    This dumbly tries to make words from the most common letters so that
+    a guess has the highest chance of matching. It's a crude heuristic.
+    The algorithm is also very inefficient but it is simple.
+    """
+    depth = 5
+    for f in range(0,depth):
+        for f1 in range(0,depth):
+            for f2 in range(0,depth):
+                for f3 in range(0,depth):
+                    for f4 in range(0,depth):
+                        w = sfreqs[0][f][0] + sfreqs[1][f1][0] + sfreqs[2][f2][0] + sfreqs[3][f3][0] + sfreqs[4][f4][0]
+                        print(f"w1={w}")
+                        if w in words: # is this permutation of letters actually a word? 
+                            yield w
+
+
+def guess_from_list(words):
+    """ make a guess of what words in a dictionary
+    are best to try - outputs the 'best' first """
+
+    freqs = calculate_freqs(words)
+    print(f"len-words={len(words)}")
+    sfreqs = sort_freqs(freqs)
+    show_sfreqs(sfreqs)
+    for w in choose_words(sfreqs, words):
+        print(f"w={w}")
+        yield w
+
+def generate_regexps(words, guesses):
+    """ converts an representation of the game state
+        into a regular expression which can be used
+        to filter words that match the current game constraints
+        In practise a simple character class also needs
+        to be output to handle "yellow" squares
+
+        """
+
+    greens_re  = ["","","","",""]
+    yellows_re  = ["","","","",""]
+    greys = []
+    for g in guesses:
+        w, result = g
+        print(g)
+        for i in range(0, 5):
+            c = w[i]
+            r = result[i]
+            if r == "g":
+                if not c in greys:
+                    greys.append(c)
+            if r == "r":
+                if not c in greens_re[i]:
+                    greens_re[i] += c
+            if r == "y":
+                if not c in yellows_re[i]:
+                    yellows_re[i] += c
+
+    print(f"greys = {greys}")
+    print(f"yellows_re = {yellows_re}")
+    print(f"greens_re = {greens_re}")
+
+    char_re = ["","","","",""]
+
+    yellows = "".join(yellows_re)
+    greys_str = "".join([g for g in greys if g not in yellows]) 
+    for i in range(0, len(char_re)):
+        if greens_re[i] != "":
+            char_re[i] = f"{greens_re[i]}"
+        else:
+            char_re[i] = f"[^{greys_str}{yellows_re[i]}]"
+
+    first_res = "^" + "".join(char_re)
+    print(f"first regexp: {first_res}")
+
+
+    first_re = re.compile(first_res)
+    print(f"yellows={yellows}")
+    return first_re, yellows
+
+def filter_words(words, first_re, yellows):
+    """ filter words based on existing constraint regexps """
+    for w in words:
+        if first_re.match(w):
+            show = True
+            for p in yellows:
+                if p not in w:
+                    show = False
+                    #print(f"false: {w}")
+                    break 
+            if show:
+                yield(w)
+
+guesses = [
+        ]
+
+if __name__ == "__main__":
+
+    parser = argparse.ArgumentParser(description='Wordle assistant')
+    parser.add_argument('-d', help="dictionary of 5 letter words",  
+            dest="dict5", default="5dict_lowercase.en")
+    parser.add_argument('-g', help="""game state file (json) e.g.
+[
+	["sores", "ggggg"],
+	["china", "ggygg"],
+	["limit", "yrggg"],
+	["vigil", "grggy"]
+]
+""",  dest="guesses", default="")
+    args = parser.parse_args()
+
+    words = load_dict(args.dict5)
+    if args.guesses != "":
+        with open(sys.argv[2], "r") as gf:
+            guesses = json.load(gf)
+
+    if len(guesses) > 0:
+        first_re, yellows = generate_regexps(words, guesses)
+        filtered_words = list(filter_words(words, first_re, yellows))
+    else:
+        first_re = re.compile(".*")
+        yellows = ""
+        filtered_words = words
+
+    guessed_words = list(guess_from_list(filtered_words))
+    fw = list(filter_words(guessed_words, first_re, yellows))
+    print(f"Suggestions: ")
+    for w in fw:
+        print(w)
+
